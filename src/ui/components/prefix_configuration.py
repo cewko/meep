@@ -26,6 +26,7 @@ class PrefixConfigurationWidget:
         self._frame: Optional[ctk.CTkFrame] = None
         self._prefix_var: Optional[ctk.StringVar] = None
         self._widgets: Dict[str, ctk.CTkWidget] = {}
+        self._is_enabled = True
         
         self._create_widgets()
     
@@ -123,19 +124,27 @@ class PrefixConfigurationWidget:
             self._widgets['change_button'].configure(state="disabled")
         else:
             self._widgets['change_button'].configure(state="normal")
-    
+
+    def set_enabled(self, enabled: bool) -> None:
+        """Enable or disable the entire widget."""
+        self._is_enabled = enabled
+        
+        if enabled:
+            self._widgets['prefix_entry'].configure(state="normal")
+            
+            button = self._widgets['change_button']
+            button.configure(state="normal")
+
+            # Refresh the change button to fix visual artifacts...
+            original_text = button.cget("text")
+            button.configure(text=original_text + " ") 
+            button.update_idletasks()
+            button.configure(text=original_text)
+        else:
+            self._widgets['prefix_entry'].configure(state="disabled")
+            self._widgets['change_button'].configure(state="disabled")
+
     def destroy(self) -> None:
         """Destroy the widget."""
         if self._frame:
             self._frame.destroy()
-    
-    @property
-    def config(self) -> PrefixConfig:
-        """Get current configuration."""
-        return self._config
-    
-    @property
-    def prefix_id(self) -> str:
-        """Get prefix ID."""
-        return self._prefix_id
-

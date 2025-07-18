@@ -8,24 +8,29 @@ from core.input.hotkey_manager import HotkeyManager
 from core.system.minecraft_detector import MinecraftDetector
 from services.message_sender import MessageSender
 from config.constants import MINECRAFT_PROCESS_CHECK_INTERVAL, STATUS_UPDATE_DELAY
-from config.settings import app_settings
 
 
 class VoiceService:
     """Main service coordinating voice chat functionality."""
     
     def __init__(
-            self, hotkey_mappings: Dict[str, str],
+            self, 
+            hotkey_mappings: Dict[str, str],
             status_callback: Optional[Callable[[str], None]] = None,
+            model_ready_callback: Optional[Callable[[bool], None]] = None,
             auto_send: bool = True
         ):
         self._logger = logging.getLogger(__name__)
         self._hotkey_mappings = hotkey_mappings
         self._status_callback = status_callback
+        self._model_ready_callback = model_ready_callback
         self._auto_send = auto_send
         
         # Initialize components
-        self._audio_processor = AudioProcessor(self._on_transcription_complete)
+        self._audio_processor = AudioProcessor(
+            self._on_transcription_complete, 
+            self._on_model_ready
+        )
         self._hotkey_manager = HotkeyManager(
             hotkey_mappings,
             self._on_hotkey_pressed,
@@ -41,10 +46,31 @@ class VoiceService:
         
         self._update_status(f"Voice service initialized ({'auto-send' if auto_send else 'manual-send'})")
     
+    def initialize_model(self) -> None:
+        """Initialize the speech recognition model."""
+        self._logger.info("Initializing speech recognition model")
+        self._update_status("Loading speech recognition model...")
+        self._audio_processor.initialize_model()
+    
+    def _on_model_ready(self, is_ready: bool) -> None:
+        """Handle model ready callback."""
+        if is_ready:
+            send_mode = "auto-send" if self._auto_send else "manual-send"
+            self._update_status(f"Model loaded successfully! Ready to start ({send_mode})")
+        else:
+            self._update_status("Failed to load speech recognition model")
+            
+        if self._model_ready_callback:
+            self._model_ready_callback(is_ready)
+    
     def start(self) -> None:
         """Start the voice chat service."""
         if self._is_running:
             self._logger.warning("Service already running")
+            return
+        
+        if not self._audio_processor.is_model_ready:
+            self._update_status("Cannot start: Speech recognition model not ready")
             return
             
         self._is_running = True
@@ -53,13 +79,14 @@ class VoiceService:
         # Start monitoring thread
         self._monitoring_thread = threading.Thread(
             target=self._monitoring_loop,
-            daemon=True
+            daemon=True,
+            name="VoiceServiceMonitor"
         )
         self._monitoring_thread.start()
         
         send_mode = "auto-send" if self._auto_send else "manual-send"
-        self._update_status(f"Ready ({send_mode})")
-        self._logger.info(f"Voice chat service started with hotkeys: {self._hotkey_mappings}")
+        self._update_status(f"Started ({send_mode}). Use configured hotkeys to record")
+        self._logger.info(f"VC service started with hotkeys: {self._hotkey_mappings}")
     
     def stop(self) -> None:
         """Stop the voice chat service."""
@@ -73,8 +100,8 @@ class VoiceService:
         if self._monitoring_thread and self._monitoring_thread.is_alive():
             self._monitoring_thread.join(timeout=1.0)
         
-        self._update_status("Voice chat stopped")
-        self._logger.info("Voice chat service stopped")
+        self._update_status("Stopped")
+        self._logger.info("VC service stopped")
     
     def set_auto_send(self, auto_send: bool) -> None:
         """Update auto-send setting."""
@@ -105,6 +132,10 @@ class VoiceService:
         """Handle hotkey press event."""
         if self._audio_processor.is_recording:
             return
+        
+        if not self._audio_processor.is_model_ready:
+            self._update_status("Speech recognition model not ready")
+            return
             
         if not self._minecraft_detector.is_minecraft_focused():
             self._update_status("Minecraft is not focused. Hold the key while in-game.")
@@ -123,11 +154,7 @@ class VoiceService:
         """Handle hotkey release event."""
         if self._audio_processor.is_recording and self._current_prefix == prefix:
             self._audio_processor.stop_recording_and_process()
-
-            if any(app_settings.audio.get_models_path().iterdir()):
-                self._update_status("Processing...")
-            else:
-                self._update_status(f"Downloading Faster Whisper ({app_settings.audio.whisper_model})...")
+            self._update_status("Processing...")
     
     def _on_transcription_complete(self, transcribed_text: str) -> None:
         """Handle completed transcription."""
@@ -147,9 +174,9 @@ class VoiceService:
                 self._update_status(f"Message recognized. Ready to be modified (press Enter to send)")
                 self._message_sender.send_message(message, auto_send=False)
                 
-        except Exception as e:
-            self._logger.error(f"Failed to send message: {e}")
-            self._update_status(f"Send error: {e}")
+        except Exception as error:
+            self._logger.error(f"Failed to send message: {error}")
+            self._update_status(f"Send error: {error}")
         
         self._schedule_status_reset()
     
@@ -166,7 +193,7 @@ class VoiceService:
             send_mode = "auto-send" if self._auto_send else "manual-send"
             self._update_status(f"Use hotkeys to speak ({send_mode})")
         
-        threading.Thread(target=reset_status, daemon=True).start()
+        threading.Thread(target=reset_status, daemon=True, name="StatusReset").start()
     
     def _update_status(self, message: str) -> None:
         """Update status through callback."""
@@ -177,4 +204,8 @@ class VoiceService:
     def is_running(self) -> bool:
         """Check if service is running."""
         return self._is_running
-
+    
+    @property
+    def is_model_ready(self) -> bool:
+        """Check if the speech recognition model is ready."""
+        return self._audio_processor.is_model_ready

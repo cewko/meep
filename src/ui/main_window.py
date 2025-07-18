@@ -27,6 +27,7 @@ class MinecraftSTTWindow:
         self._is_running = False
         self._is_binding_hotkey = False
         self._current_binding_prefix: Optional[str] = None
+        self._is_model_ready = False
         
         # UI components
         self._root: Optional[ctk.CTk] = None
@@ -35,6 +36,7 @@ class MinecraftSTTWindow:
         self._control_buttons: Dict[str, ctk.CTkButton] = {}
         
         self._setup_ui()
+        self._initialize_voice_service()
     
     def _setup_ui(self) -> None:
         """Set up the user interface."""
@@ -62,7 +64,7 @@ class MinecraftSTTWindow:
         title_label.pack(pady=(20, 10))
         
         # Status display
-        self._status_display = StatusDisplay(main_frame)
+        self._status_display = StatusDisplay(main_frame, "Initializing...")
         
         # Control buttons
         self._create_control_buttons(main_frame)
@@ -74,7 +76,77 @@ class MinecraftSTTWindow:
         self._root.bind("<Key>", self._on_key_press)
         self._root.focus_set()
         
+        # Initially disable all buttons
+        self._set_ui_enabled(False)
+        
         self._logger.info("UI setup complete")
+    
+    def _initialize_voice_service(self) -> None:
+        """Initialize the voice service and start model loading."""
+        def init_service():
+            try:
+                # Create hotkey mappings
+                hotkey_mappings = {
+                    config.hotkey.lower(): config.prefix
+                    for config in self._prefix_configs.values()
+                }
+                
+                self._logger.info("Creating voice service...")
+                
+                # Create voice service
+                self._voice_service = VoiceService(
+                    hotkey_mappings=hotkey_mappings,
+                    status_callback=self._update_status,
+                    model_ready_callback=self._on_model_ready,
+                    auto_send=self._auto_send_enabled
+                )
+                
+                self._logger.info("Voice service created, starting model initialization...")
+                
+                # Start model initialization
+                self._voice_service.initialize_model()
+                
+                self._logger.info("Model initialization started")
+                
+            except Exception as error:
+                self._logger.error(f"Failed to initialize voice service: {error}")
+                self._update_status(f"Initialization failed: {error}")
+                self._set_ui_enabled(True)
+        
+        # Run initialization in separate thread
+        init_thread = threading.Thread(
+            target=init_service,
+            daemon=True,
+            name="ServiceInitializer"
+        )
+        init_thread.start()
+        self._logger.info("Service initialization thread started")
+    
+    def _on_model_ready(self, is_ready: bool) -> None:
+        """Handle model ready callback."""
+        self._is_model_ready = is_ready
+        
+        if is_ready:
+            self._logger.info("Speech recognition model is ready")
+            self._set_ui_enabled(True)
+        else:
+            self._logger.error("Speech recognition model failed to load")
+            self._update_status("Model loading failed. Please restart the application.")
+    
+    def _set_ui_enabled(self, enabled: bool) -> None:
+        """Enable or disable UI controls."""
+        if not self._control_buttons:
+            return
+            
+        state = "normal" if enabled else "disabled"
+        
+        # Enable/disable control buttons
+        for button in self._control_buttons.values():
+            button.configure(state=state)
+        
+        # Enable/disable prefix configuration widgets
+        for widget in self._prefix_widgets.values():
+            widget.set_enabled(enabled)
     
     def _create_control_buttons(self, parent: ctk.CTkFrame) -> None:
         """Create control buttons."""
@@ -95,7 +167,8 @@ class MinecraftSTTWindow:
             corner_radius=10,
             height=40,
             font=ctk.CTkFont(size=12, weight="bold"),
-            command=self._toggle_voice_chat
+            command=self._toggle_voice_chat,
+            state="disabled"  # Initially disabled
         )
         start_button.grid(row=0, column=0, padx=(0, 10))
         
@@ -107,7 +180,8 @@ class MinecraftSTTWindow:
             corner_radius=10,
             height=40,
             font=ctk.CTkFont(size=12, weight="bold"),
-            command=self._toggle_auto_send
+            command=self._toggle_auto_send,
+            state="disabled"  # Initially disabled
         )
         auto_send_button.grid(row=0, column=1, padx=(10, 0))
         
@@ -146,6 +220,10 @@ class MinecraftSTTWindow:
     
     def _toggle_voice_chat(self) -> None:
         """Toggle voice chat on/off."""
+        if not self._is_model_ready:
+            self._update_status("Cannot start: Speech recognition model not ready")
+            return
+            
         if not self._is_running:
             self._start_voice_chat()
         else:
@@ -153,26 +231,13 @@ class MinecraftSTTWindow:
     
     def _start_voice_chat(self) -> None:
         """Start voice chat service."""
+        if not self._voice_service or not self._is_model_ready:
+            self._update_status("Cannot start: Voice service not ready")
+            return
+            
         try:
-            # Create hotkey mappings
-            hotkey_mappings = {
-                config.hotkey.lower(): config.prefix
-                for config in self._prefix_configs.values()
-            }
-            
-            # Create and start service
-            self._voice_service = VoiceService(
-                hotkey_mappings=hotkey_mappings,
-                status_callback=self._update_status,
-                auto_send=self._auto_send_enabled
-            )
-            
-            # Start in separate thread
-            service_thread = threading.Thread(
-                target=self._voice_service.start,
-                daemon=True
-            )
-            service_thread.start()
+            # Start voice service
+            self._voice_service.start()
             
             # Update UI
             self._is_running = True
@@ -182,9 +247,6 @@ class MinecraftSTTWindow:
                 hover_color="#99182C"
             )
             
-            mode_text = "auto-send" if self._auto_send_enabled else "manual-send"
-            self._update_status(f"Voice chat started ({mode_text}). Use configured hotkeys to record")
-            
         except Exception as error:
             self._logger.error(f"Error starting voice chat: {error}")
             self._update_status(f"Error: {str(error)}")
@@ -193,7 +255,6 @@ class MinecraftSTTWindow:
         """Stop voice chat service."""
         if self._voice_service:
             self._voice_service.stop()
-            self._voice_service = None
         
         # Update UI
         self._is_running = False
@@ -358,4 +419,3 @@ class MinecraftSTTWindow:
         
         # Start main loop
         self._root.mainloop()
-

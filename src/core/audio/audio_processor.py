@@ -1,6 +1,6 @@
 import logging
 import threading
-from typing import Callable
+from typing import Callable, Optional
 
 from core.audio.voice_recorder import VoiceRecorder
 from core.audio.speech_recognizer import SpeechRecognizer
@@ -10,15 +10,38 @@ from utils.exceptions import AudioProcessingError
 class AudioProcessor:
     """Coordinates audio recording and speech recognition."""
     
-    def __init__(self, transcription_callback: Callable[[str], None]):
+    def __init__(
+        self, 
+        transcription_callback: Callable[[str], None],
+        model_ready_callback: Optional[Callable[[bool], None]] = None
+    ):
         self._logger = logging.getLogger(__name__)
         self._transcription_callback = transcription_callback
+        self._model_ready_callback = model_ready_callback
         
         self._voice_recorder = VoiceRecorder()
-        self._speech_recognizer = SpeechRecognizer()
+        self._speech_recognizer = SpeechRecognizer(self._on_model_ready)
+        
+    def initialize_model(self) -> None:
+        """Initialize the speech recognition model asynchronously."""
+        self._logger.info("Initializing speech recognition model")
+        self._speech_recognizer.initialize_model_async()
+    
+    def _on_model_ready(self, is_ready: bool) -> None:
+        """Handle model ready callback."""
+        if is_ready:
+            self._logger.info("Speech recognition model is ready")
+        else:
+            self._logger.error("Speech recognition model failed to load")
+            
+        if self._model_ready_callback:
+            self._model_ready_callback(is_ready)
         
     def start_recording(self) -> None:
         """Start audio recording."""
+        if not self._speech_recognizer.is_model_ready:
+            raise AudioProcessingError("Speech recognition model is not ready")
+            
         try:
             self._voice_recorder.start_recording()
             self._logger.info("Audio recording started")
@@ -36,7 +59,8 @@ class AudioProcessor:
             processing_thread = threading.Thread(
                 target=self._process_audio,
                 args=(audio_data,),
-                daemon=True
+                daemon=True,
+                name="AudioProcessor"
             )
             processing_thread.start()
             
@@ -59,7 +83,11 @@ class AudioProcessor:
         """Check if currently recording."""
         return self._voice_recorder.is_recording
     
+    @property
+    def is_model_ready(self) -> bool:
+        """Check if the speech recognition model is ready."""
+        return self._speech_recognizer.is_model_ready
+    
     def cleanup(self) -> None:
         """Clean up resources."""
         self._voice_recorder.cleanup()
-
