@@ -104,7 +104,15 @@ class SpeechRecognizer:
                 if self._model is None:
                     raise AudioProcessingError("Model is None despite being marked as ready")
                     
-                segments, _ = self._model.transcribe(audio_data, language='en')
+                segments, _ = self._model.transcribe(
+                    audio_data, 
+                    language='en',
+                    vad_filter=True, 
+                    vad_parameters=dict(min_silence_duration_ms=500),
+                    beam_size=self._audio_settings.beam_size,
+                    best_of=1,
+                    temperature=0.0
+                )
                 
             text = ''.join([segment.text for segment in segments]).strip()
             

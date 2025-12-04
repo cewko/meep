@@ -11,6 +11,7 @@ class AudioSettings:
     dtype: str = 'float32'
     whisper_model: str = 'small'
     compute_type: str = 'int8'
+    beam_size: int = 3
     models_directory: str = None
 
     def __post_init__(self):
